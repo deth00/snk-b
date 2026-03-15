@@ -1,29 +1,51 @@
 import { Router } from 'express';
 import { body, param, validationResult } from 'express-validator';
 import pool from '../config/db.js';
-import { authMiddleware, requireCashier } from '../middleware/auth.js';
+import { authMiddleware, requireAll } from '../middleware/auth.js';
+import { branchMiddleware, requireBranch } from '../middleware/branch.js';
 
 const router = Router();
 router.use(authMiddleware);
+router.use(branchMiddleware);
+
+// GET /api/shifts — รายการกะ (ต้องส่ง X-Branch-Id)
+router.get('/', requireAll, requireBranch, async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT s.id, s.opened_at, s.closed_at, s.branch_id, u.username AS opened_by_username
+       FROM shifts s
+       LEFT JOIN users u ON u.id = s.opened_by
+       WHERE s.branch_id = ? OR (s.branch_id IS NULL AND ? IS NULL)
+       ORDER BY s.id DESC
+       LIMIT 200`,
+      [req.branchId, req.branchId]
+    );
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // POST /api/shifts/open
 router.post(
   '/open',
-  requireCashier,
+  requireAll,
+  requireBranch,
   body('cash_open').optional().isFloat({ min: 0 }),
   async (req, res) => {
     try {
       const [current] = await pool.query(
-        "SELECT id FROM shifts WHERE closed_at IS NULL LIMIT 1"
+        'SELECT id FROM shifts WHERE closed_at IS NULL AND (branch_id = ? OR (branch_id IS NULL AND ? IS NULL)) LIMIT 1',
+        [req.branchId, req.branchId]
       );
       if (current.length > 0) {
-        return res.status(400).json({ error: 'A shift is already open' });
+        return res.status(400).json({ error: 'สาขานี้มีกะเปิดอยู่แล้ว' });
       }
       const openedAt = new Date();
       const cashOpen = req.body.cash_open != null ? Number(req.body.cash_open) : null;
       await pool.query(
-        'INSERT INTO shifts (opened_by, opened_at, cash_open) VALUES (?, ?, ?)',
-        [req.user.id, openedAt, cashOpen]
+        'INSERT INTO shifts (opened_by, opened_at, cash_open, branch_id) VALUES (?, ?, ?, ?)',
+        [req.user.id, openedAt, cashOpen, req.branchId]
       );
       const [rows] = await pool.query('SELECT * FROM shifts WHERE id = LAST_INSERT_ID()');
       res.status(201).json(rows[0]);
@@ -34,14 +56,15 @@ router.post(
 );
 
 // GET /api/shifts/current
-router.get('/current', requireCashier, async (req, res) => {
+router.get('/current', requireAll, requireBranch, async (req, res) => {
   try {
     const [rows] = await pool.query(
       `SELECT s.*, u.username AS opened_by_username
        FROM shifts s
-       JOIN users u ON u.id = s.opened_by
-       WHERE s.closed_at IS NULL
-       LIMIT 1`
+       LEFT JOIN users u ON u.id = s.opened_by
+       WHERE s.closed_at IS NULL AND (s.branch_id = ? OR (s.branch_id IS NULL AND ? IS NULL))
+       LIMIT 1`,
+      [req.branchId, req.branchId]
     );
     if (!rows[0]) return res.status(404).json({ error: 'No open shift' });
     res.json(rows[0]);
@@ -53,7 +76,8 @@ router.get('/current', requireCashier, async (req, res) => {
 // POST /api/shifts/:id/close
 router.post(
   '/:id/close',
-  requireCashier,
+  requireAll,
+  requireBranch,
   param('id').isInt(),
   body('cash_close').optional().isFloat({ min: 0 }),
   body('note').optional().trim(),
@@ -75,6 +99,11 @@ router.post(
         conn.release();
         return res.status(400).json({ error: 'Shift already closed' });
       }
+      if (shift.branch_id != null && Number(shift.branch_id) !== Number(req.branchId)) {
+        await conn.rollback();
+        conn.release();
+        return res.status(403).json({ error: 'กะนี้ไม่ใช่ของสาขานี้' });
+      }
       const closedAt = new Date();
       const cashClose = req.body.cash_close != null ? Number(req.body.cash_close) : null;
       const note = req.body.note || null;
@@ -86,7 +115,7 @@ router.post(
       const [payRow] = await conn.query(
         `SELECT
           COALESCE(SUM(CASE WHEN p.method = 'cash' THEN p.amount ELSE 0 END), 0) AS total_cash,
-          COALESCE(SUM(CASE WHEN p.method IN ('qr','transfer','card') THEN p.amount ELSE 0 END), 0) AS total_qr
+          COALESCE(SUM(CASE WHEN p.method IN ('qr','transfer','card','mixed') THEN p.amount ELSE 0 END), 0) AS total_qr
          FROM payments p
          JOIN orders o ON o.id = p.order_id
          WHERE o.shift_id = ? AND o.status = 'paid'`,

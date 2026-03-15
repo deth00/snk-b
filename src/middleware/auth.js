@@ -30,10 +30,7 @@ export async function authMiddleware(req, res, next) {
   if (!payload) {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
-  const [rows] = await pool.query(
-    'SELECT id, username, role, display_name, is_active FROM users WHERE id = ?',
-    [payload.id]
-  );
+  const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [payload.id]);
   const user = rows[0];
   if (!user || !user.is_active) {
     return res.status(401).json({ error: 'User not found or inactive' });
@@ -53,5 +50,5 @@ export function requireRoles(...roles) {
 }
 
 export const requireAdmin = requireRoles('admin');
-export const requireCashier = requireRoles('admin', 'cashier');
-export const requireStaff = requireRoles('admin', 'cashier', 'staff');
+export const requireManager = requireRoles('admin', 'manager');
+export const requireAll = requireRoles('admin', 'manager', 'user');

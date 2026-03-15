@@ -1,12 +1,12 @@
 -- Snooker Hall Backend - MySQL Schema
 -- Run: CREATE DATABASE snk_b; then mysql -u root -p snk_b < src/db/schema.sql
 
--- 1) users (Auth + Roles: admin, cashier, staff)
+-- 1) users (Auth + Roles: admin, manager, user)
 CREATE TABLE IF NOT EXISTS users (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   username VARCHAR(50) NOT NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,
-  role ENUM('admin','cashier','staff') NOT NULL DEFAULT 'staff',
+  role ENUM('admin','manager','user') NOT NULL DEFAULT 'user',
   display_name VARCHAR(100),
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,

@@ -1,13 +1,13 @@
 /**
- * Business Logic: คำนวณเวลาเล่นและเงิน (ชั่วโมงทศนิยม)
+ * Business Logic: คำนวณเวลาเล่นและเงิน (เป็นนาที, จำนวนเงินปัดเป็นจำนวนเต็ม)
  * 1) played_seconds = (now - started_at) - paused_seconds - (ถ้า paused อยู่ ให้หัก now-paused_at เพิ่ม)
  * 2) minutes_raw = ceil(played_seconds / 60)
  * 3) ปัดเศษเป็นนาที (rounding_minutes, mode)
- * 4) units = minutes / 60.0, units = max(units, minimum_units)
- * 5) amount = units * price_per_unit
+ * 4) minutes = คำนวณจากขั้นตอน 2-3
+ * 5) amount = (minutes/60) * price_per_unit แล้วปัดเป็นจำนวนเต็ม (ກີບ)
  */
 
-export function computeSessionAmount(session, rate, asOf = new Date()) {
+export function computeSessionAmount(session, pricing, asOf = new Date()) {
   const startedAt = new Date(session.started_at);
   let pausedSeconds = Number(session.paused_seconds) || 0;
   const pausedAt = session.paused_at ? new Date(session.paused_at) : null;
@@ -23,8 +23,8 @@ export function computeSessionAmount(session, rate, asOf = new Date()) {
 
   let minutesRaw = Math.ceil(playedSeconds / 60);
 
-  const roundingMinutes = Number(rate.rounding_minutes) || 0;
-  const roundingMode = rate.rounding_mode || 'ceil';
+  const roundingMinutes = Number(pricing.rounding_minutes) ?? 0;
+  const roundingMode = pricing.rounding_mode || 'ceil';
 
   let minutes = minutesRaw;
   if (roundingMinutes > 0) {
@@ -38,11 +38,12 @@ export function computeSessionAmount(session, rate, asOf = new Date()) {
   }
 
   let units = minutes / 60.0;
-  const minimumUnits = Number(rate.minimum_units) || 0;
+  const minimumUnits = Number(pricing.minimum_units) ?? 0;
   units = Math.max(units, minimumUnits);
 
-  const pricePerUnit = Number(rate.price_per_unit) || 0;
-  const amount = Math.round(units * pricePerUnit * 100) / 100;
+  const pricePerUnit = Number(pricing.price_per_unit) || 0;
+  // คำนวณจากนาที (units = minutes/60), จำนวนเงินปัดเป็นจำนวนเต็ม (ກີບ)
+  const amount = Math.round(units * pricePerUnit);
 
   return {
     played_seconds: playedSeconds,
