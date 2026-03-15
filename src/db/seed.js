@@ -9,14 +9,14 @@ async function seed() {
     ['admin', passwordHash]
   );
   await pool.query(
-    `INSERT INTO users (username, password_hash, role, display_name) VALUES (?, ?, 'cashier', 'Cashier')
+    `INSERT INTO users (username, password_hash, role, display_name) VALUES (?, ?, 'manager', 'Manager')
      ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash)`,
-    ['cashier', await bcrypt.hash('cashier123', 10)]
+    ['manager', await bcrypt.hash('manager123', 10)]
   );
   await pool.query(
-    `INSERT INTO users (username, password_hash, role, display_name) VALUES (?, ?, 'staff', 'Staff')
+    `INSERT INTO users (username, password_hash, role, display_name) VALUES (?, ?, 'user', 'User')
      ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash)`,
-    ['staff', await bcrypt.hash('staff123', 10)]
+    ['user', await bcrypt.hash('user123', 10)]
   );
 
   const tables = [
@@ -62,7 +62,7 @@ async function seed() {
     );
   }
 
-  console.log('Seed done. Users: admin/admin123, cashier/cashier123, staff/staff123');
+  console.log('Seed done. Users: admin/admin123, manager/manager123, user/user123');
 }
 
 seed()
