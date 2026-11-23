@@ -3,6 +3,7 @@ import { body, param, query, validationResult } from 'express-validator';
 import pool from '../config/db.js';
 import { authMiddleware, requireManager, requireAdmin, requireAll } from '../middleware/auth.js';
 import { branchMiddleware, requireBranch } from '../middleware/branch.js';
+import { laoTodayCompact, laoTodaySql } from '../utils/time.js';
 
 const router = Router();
 router.use(authMiddleware);
@@ -98,10 +99,10 @@ router.post(
       if (!invoiceId && bid != null) {
         const [branchRows] = await pool.query('SELECT code FROM branches WHERE id = ?', [bid]);
         const branchCode = (branchRows[0]?.code || `B${bid}`).replace(/[^A-Za-z0-9]/g, '').slice(0, 10) || `B${bid}`;
-        const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+        const today = laoTodayCompact();
         const [countRows] = await pool.query(
-          'SELECT COUNT(*) AS n FROM incomes WHERE branch_id = ? AND DATE(created_at) = CURDATE()',
-          [bid]
+          'SELECT COUNT(*) AS n FROM incomes WHERE branch_id = ? AND DATE(created_at) = ?',
+          [bid, laoTodaySql()]
         );
         const seq = (countRows[0]?.n || 0) + 1;
         invoiceId = `${branchCode}-INC-${today}-${String(seq).padStart(4, '0')}`;

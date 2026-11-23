@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { body, param, validationResult } from 'express-validator';
 import pool from '../config/db.js';
-import { authMiddleware, requireManager } from '../middleware/auth.js';
+import { authMiddleware, requirePermission } from '../middleware/auth.js';
 import { branchMiddleware, requireBranch } from '../middleware/branch.js';
 
 const router = Router();
@@ -30,7 +30,7 @@ router.use(authMiddleware);
 router.use(branchMiddleware);
 
 // GET /api/tables (พร้อม status + session summary) — ต้องส่ง X-Branch-Id
-router.get('/', requireBranch, async (req, res) => {
+router.get('/', requirePermission('tables', 'view'), requireBranch, async (req, res) => {
   try {
     const [rows] = await pool.query(`
       SELECT t.id, t.code, t.name, t.port, t.price_per_unit, t.branch_id, t.status, t.active_session_id, t.created_at, t.updated_at,
@@ -53,7 +53,7 @@ router.get('/', requireBranch, async (req, res) => {
 // POST /api/tables (admin)
 router.post(
   '/',
-  requireManager,
+  requirePermission('tables', 'create'),
   requireBranch,
   body('code').trim().notEmpty(),
   body('name').optional().trim(),
@@ -83,7 +83,7 @@ router.post(
 // PATCH /api/tables/:id
 router.patch(
   '/:id',
-  requireManager,
+  requirePermission('tables', 'edit'),
   requireBranch,
   param('id').isInt(),
   body('code').optional().trim().notEmpty(),

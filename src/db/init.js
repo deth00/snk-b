@@ -3,6 +3,7 @@ import dotenv from 'dotenv';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { LAO_DB_TIMEZONE } from '../utils/time.js';
 
 dotenv.config();
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -14,7 +15,9 @@ async function init() {
     user: process.env.DB_USER || 'dbeaver',
     password: process.env.DB_PASSWORD || 'deth@123',
     multipleStatements: true,
+    timezone: LAO_DB_TIMEZONE,
   });
+  await conn.query(`SET time_zone = '${LAO_DB_TIMEZONE}'`);
   const dbName = process.env.DB_NAME || 'snk_b';
   await conn.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
   await conn.query(`USE \`${dbName}\``);

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { body, param, validationResult } from 'express-validator';
 import pool from '../config/db.js';
-import { authMiddleware, requireAdmin } from '../middleware/auth.js';
+import { authMiddleware, requireAdmin, requirePermission } from '../middleware/auth.js';
 
 const router = Router();
 router.use(authMiddleware);
@@ -93,6 +93,7 @@ router.post(
 // PATCH /api/stores/:id
 router.patch(
   '/:id',
+  requirePermission('stores', 'edit'),
   param('id').isInt(),
   body('name').optional().trim().notEmpty(),
   body('logo').optional().trim(),

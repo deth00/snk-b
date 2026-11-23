@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
 import pool from '../config/db.js';
+import { DEFAULT_ROLE_PERMISSIONS, PERMISSION_ACTION_OPTIONS, apiPermissionAction, apiPermissionKey, permissionStorageKey } from '../permissions.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
@@ -40,12 +41,60 @@ export async function authMiddleware(req, res, next) {
 }
 
 export function requireRoles(...roles) {
-  return (req, res, next) => {
+  return async (req, res, next) => {
     if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
+    if (req.user.role === 'admin') return next();
+
+    const permissionKey = apiPermissionKey(req);
+    if (permissionKey) {
+      try {
+        const allowed = await hasPermission(req.user.role, permissionKey, apiPermissionAction(req));
+        if (allowed) return next();
+        return res.status(403).json({ error: 'Forbidden' });
+      } catch (err) {
+        return res.status(500).json({ error: err.message });
+      }
+    }
+
     if (!roles.includes(req.user.role)) {
       return res.status(403).json({ error: 'Forbidden' });
     }
     next();
+  };
+}
+
+export async function hasPermission(role, permissionKey, action = 'view') {
+  if (role === 'admin') return true;
+  if (!(PERMISSION_ACTION_OPTIONS[permissionKey] || ['view']).includes(action)) return false;
+  try {
+    const [rows] = await pool.query(
+      'SELECT allowed FROM role_permissions WHERE role = ? AND permission_key = ?',
+      [role, permissionStorageKey(permissionKey, action)]
+    );
+    if (rows[0]) return Boolean(rows[0].allowed);
+
+    if (action === 'view') {
+      const [legacyRows] = await pool.query(
+        'SELECT allowed FROM role_permissions WHERE role = ? AND permission_key = ?',
+        [role, permissionKey]
+      );
+      if (legacyRows[0]) return Boolean(legacyRows[0].allowed);
+    }
+  } catch (err) {
+    if (err.code !== 'ER_NO_SUCH_TABLE') throw err;
+  }
+  return Boolean(DEFAULT_ROLE_PERMISSIONS[role]?.[permissionKey]?.[action]);
+}
+
+export function requirePermission(permissionKey, action = 'view') {
+  return async (req, res, next) => {
+    if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
+    try {
+      if (await hasPermission(req.user.role, permissionKey, action)) return next();
+      return res.status(403).json({ error: 'Forbidden' });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
   };
 }
 

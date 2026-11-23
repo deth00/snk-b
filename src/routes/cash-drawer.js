@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { body, query, validationResult } from 'express-validator';
 import pool from '../config/db.js';
-import { authMiddleware, requireAll } from '../middleware/auth.js';
+import { authMiddleware, hasPermission, requireAll } from '../middleware/auth.js';
 import { branchMiddleware, requireBranch } from '../middleware/branch.js';
 
 const router = Router();
@@ -17,9 +17,14 @@ async function ensureDrawer (branchId) {
   return created[0];
 }
 
+async function canUseCashDrawer(req) {
+  return hasPermission(req.user.role, 'cashDrawer');
+}
+
 // GET /all — ยอดคงเหลือทุกสาขา (admin only)
 router.get('/all', async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'ບໍ່ມີສິດ' });
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  if (!(await canUseCashDrawer(req))) return res.status(403).json({ error: 'ບໍ່ມີສິດ' });
   try {
     const [branches] = await pool.query('SELECT id, name FROM branches ORDER BY id');
     const results = [];
@@ -79,7 +84,7 @@ router.post('/withdraw', requireBranch, [
   body('amount').isFloat({ gt: 0 }).withMessage('ຈຳນວນຕ້ອງຫຼາຍກວ່າ 0'),
   body('note').optional({ nullable: true }).isString(),
 ], async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'ມີແຕ່ເຈົ້າຂອງຮ້ານເທົ່ານັ້ນທີ່ສາມາດຖອນເງິນໄດ້' });
+  if (!(await canUseCashDrawer(req))) return res.status(403).json({ error: 'ບໍ່ມີສິດຖອນເງິນ' });
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
   const { amount, note } = req.body;
@@ -114,7 +119,8 @@ router.get('/logs/branch/:branchId', [
   query('date_from').optional().isDate(),
   query('date_to').optional().isDate(),
 ], async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'ບໍ່ມີສິດ' });
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  if (!(await canUseCashDrawer(req))) return res.status(403).json({ error: 'ບໍ່ມີສິດ' });
   try {
     const bid = Number(req.params.branchId);
     let where = 'l.branch_id = ?';

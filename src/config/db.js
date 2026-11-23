@@ -1,5 +1,6 @@
 import mysql from 'mysql2/promise';
 import dotenv from 'dotenv';
+import { LAO_DB_TIMEZONE } from '../utils/time.js';
 
 dotenv.config();
 
@@ -12,7 +13,12 @@ const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
+  timezone: LAO_DB_TIMEZONE,
   dateStrings: true,
+});
+
+pool.on('connection', (connection) => {
+  connection.query(`SET time_zone = '${LAO_DB_TIMEZONE}'`);
 });
 
 export default pool;

@@ -5,10 +5,21 @@ import { authMiddleware, requireAll } from '../middleware/auth.js';
 import { branchMiddleware, requireBranch } from '../middleware/branch.js';
 import { computeSessionAmount } from '../services/sessionCalc.js';
 import { syncTableToEsp32 } from '../services/tableSyncEsp32.js';
+import { laoNowSql, parseLaoDateTime } from '../utils/time.js';
 
 const router = Router();
 router.use(authMiddleware);
 router.use(branchMiddleware);
+
+/** ສັ່ງເປີດ/ປິດໄຟໂຕະຜ່ານ ESP32 (fire-and-forget): 'playing' = ເປີດໄຟ, 'available' = ປິດໄຟ */
+function syncTableLight(tableId, status, branchId) {
+  pool.query('SELECT id, code, port, branch_id FROM `tables` WHERE id = ?', [tableId])
+    .then(([rows]) => {
+      const t = rows[0];
+      if (t) syncTableToEsp32({ id: t.id, code: t.code, port: t.port, status }, branchId ?? t.branch_id);
+    })
+    .catch((err) => console.warn('[ESP32 sync] table lookup failed:', err.message || err));
+}
 
 // POST /api/sessions/start { table_id } — ใช้ price จากตาราง tables ไม่ใช้ rate
 router.post(
@@ -48,7 +59,7 @@ router.post(
         conn.release();
         return res.status(400).json({ error: 'โต๊ะนี้ยังไม่มีราคา กรุณาตั้ง price_per_unit ในโต๊ะ' });
       }
-      const startedAt = new Date();
+      const startedAt = laoNowSql();
       const [currentShift] = await conn.query(
         'SELECT id, branch_id FROM shifts WHERE closed_at IS NULL AND (branch_id = ? OR (branch_id IS NULL AND ? IS NULL)) LIMIT 1',
         [bid, bid]
@@ -134,11 +145,13 @@ router.post('/:id/pause', requireAll, param('id').isInt(), async (req, res) => {
     const session = sessions[0];
     if (!session) return res.status(404).json({ error: 'Session not found' });
     if (session.status !== 'running') return res.status(400).json({ error: 'Session is not running' });
-    const pausedAt = new Date();
+    const pausedAt = laoNowSql();
     await pool.query(
       'UPDATE sessions SET status = ?, paused_at = ? WHERE id = ?',
       ['paused', pausedAt, req.params.id]
     );
+    // ຢຸດຄິດໄລ່ເວລາ → ປິດໄຟໂຕະ
+    syncTableLight(session.table_id, 'available', req.branchId);
     const [rows] = await pool.query('SELECT * FROM sessions WHERE id = ?', [req.params.id]);
     res.json(rows[0]);
   } catch (err) {
@@ -154,13 +167,16 @@ router.post('/:id/resume', requireAll, param('id').isInt(), async (req, res) => 
     if (!session) return res.status(404).json({ error: 'Session not found' });
     if (session.status !== 'paused') return res.status(400).json({ error: 'Session is not paused' });
     const now = new Date();
-    const pausedAt = new Date(session.paused_at);
+    const pausedAt = parseLaoDateTime(session.paused_at);
+    if (!pausedAt) return res.status(400).json({ error: 'Invalid paused time' });
     const extraPaused = Math.floor((now - pausedAt) / 1000);
     const newPausedSeconds = (Number(session.paused_seconds) || 0) + extraPaused;
     await pool.query(
       'UPDATE sessions SET status = ?, paused_at = NULL, paused_seconds = ? WHERE id = ?',
       ['running', newPausedSeconds, req.params.id]
     );
+    // ກັບມາຄິດໄລ່ເວລາຕໍ່ → ເປີດໄຟໂຕະ
+    syncTableLight(session.table_id, 'playing', req.branchId);
     const [rows] = await pool.query('SELECT * FROM sessions WHERE id = ?', [req.params.id]);
     res.json(rows[0]);
   } catch (err) {
@@ -225,7 +241,8 @@ router.post(
       const [fromTableRows] = await pool.query('SELECT id, code, port FROM `tables` WHERE id = ?', [fromTableId]);
       const bid = req.branchId;
       if (fromTableRows[0]) syncTableToEsp32({ ...fromTableRows[0], status: 'available' }, bid);
-      syncTableToEsp32({ id: toTable.id, code: toTable.code, port: toTable.port, status: 'playing' }, bid);
+      // ຖ້າ session ຍັງ paused ຢູ່ ໄຟໂຕະໃໝ່ຕ້ອງປິດໄວ້ຈົນກວ່າຈະ resume
+      syncTableToEsp32({ id: toTable.id, code: toTable.code, port: toTable.port, status: session.status === 'paused' ? 'available' : 'playing' }, bid);
       const [rows] = await pool.query('SELECT * FROM sessions WHERE id = ?', [id]);
       res.json(rows[0]);
     } catch (err) {
@@ -267,11 +284,12 @@ router.post('/:id/end', requireAll, param('id').isInt(), async (req, res) => {
       rounding_minutes: table.rounding_minutes ?? 0,
       rounding_mode: table.rounding_mode || 'ceil',
     };
-    const endedAt = new Date();
+    const endedAt = laoNowSql();
+    const endedAtDate = parseLaoDateTime(endedAt);
     const calc = computeSessionAmount(
       { ...session, status: session.status, ended_at: endedAt },
       pricing,
-      endedAt
+      endedAtDate
     );
     await conn.query(
       `UPDATE sessions SET status = 'ended', ended_at = ?, ended_by = ?, computed_minutes = ?, computed_units = ?, computed_amount = ? WHERE id = ?`,
@@ -279,17 +297,21 @@ router.post('/:id/end', requireAll, param('id').isInt(), async (req, res) => {
     );
     const orderId = session.order_id;
     if (orderId) {
-      const itemName = `โต๊ะ (${calc.minutes} นาที / ${calc.units} ชม.)`;
+      const pricePerMinute = calc.minutes > 0
+        ? Math.round((calc.amount / calc.minutes) * 100) / 100
+        : 0;
+      const itemName = `โต๊ะ (${calc.minutes} นาที)`;
       const meta = JSON.stringify({
         table_id: session.table_id,
         minutes: calc.minutes,
         units: calc.units,
         price_per_unit: pricing.price_per_unit,
+        price_per_minute: pricePerMinute,
       });
       await conn.query(
         `INSERT INTO order_items (order_id, item_type, ref_id, name, qty, unit_price, unit_cost, amount, meta_json)
          VALUES (?, 'table_time', ?, ?, ?, ?, 0, ?, ?)`,
-        [orderId, req.params.id, itemName, calc.units, pricing.price_per_unit, calc.amount, meta]
+        [orderId, req.params.id, itemName, calc.minutes, pricePerMinute, calc.amount, meta]
       );
       const [sumRows] = await conn.query(
         'SELECT COALESCE(SUM(amount), 0) AS subtotal FROM order_items WHERE order_id = ?',
@@ -303,6 +325,8 @@ router.post('/:id/end', requireAll, param('id').isInt(), async (req, res) => {
       ['paying', session.table_id]
     );
     await conn.commit();
+    // ຢຸດເວລາ + ຄິດໄລ່ເງິນແລ້ວ → ປິດໄຟໂຕະທັນທີ (ບໍ່ຕ້ອງລໍຖ້າຈ່າຍເງິນ)
+    syncTableLight(session.table_id, 'available', req.branchId);
     const [rows] = await pool.query(
       'SELECT s.*, t.code AS table_code, t.name AS table_name, t.price_per_unit FROM sessions s JOIN `tables` t ON t.id = s.table_id WHERE s.id = ?',
       [req.params.id]
