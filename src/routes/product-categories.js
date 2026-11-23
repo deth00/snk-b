@@ -34,8 +34,16 @@ router.post(
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
     try {
-      const { name, sort_order = 0, is_active = true } = req.body;
+      const { name, is_active = true } = req.body;
       const branchId = req.branchId;
+      let sort_order = req.body.sort_order;
+      if (sort_order === undefined) {
+        const [sortRows] = await pool.query(
+          'SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_sort_order FROM product_categories WHERE branch_id = ? OR (branch_id IS NULL AND ? IS NULL)',
+          [branchId, branchId]
+        );
+        sort_order = sortRows[0]?.next_sort_order ?? 0;
+      }
       await pool.query(
         'INSERT INTO product_categories (name, sort_order, is_active, branch_id) VALUES (?, ?, ?, ?)',
         [name, sort_order, is_active, branchId]

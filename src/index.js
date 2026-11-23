@@ -26,6 +26,7 @@ import incomesRoutes from './routes/incomes.js';
 import expensesRoutes from './routes/expenses.js';
 import stockAdjustmentsRoutes from './routes/stock-adjustments.js';
 import cashDrawerRoutes from './routes/cash-drawer.js';
+import rolePermissionsRoutes from './routes/role-permissions.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -57,6 +58,7 @@ app.use('/api/incomes', incomesRoutes);
 app.use('/api/expenses', expensesRoutes);
 app.use('/api/stock-adjustments', stockAdjustmentsRoutes);
 app.use('/api/cash-drawer', cashDrawerRoutes);
+app.use('/api/role-permissions', rolePermissionsRoutes);
 
 app.get('/health', (req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });

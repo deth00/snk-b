@@ -158,7 +158,13 @@ router.get('/:id', requireAll, requireBranch, param('id').isInt(), async (req, r
     const debtOrders = txRows.filter((t) => t.type === 'debt' && t.order_id);
     const debtOrderItems = [];
     for (const tx of debtOrders) {
-      const [[orderRow]] = await pool.query('SELECT code FROM orders WHERE id = ?', [tx.order_id]);
+      const [[orderRow]] = await pool.query(
+        `SELECT o.code, o.subtotal, o.discount, o.total, o.closed_at, o.branch_id, b.name AS branch_name
+         FROM orders o
+         LEFT JOIN branches b ON b.id = o.branch_id
+         WHERE o.id = ?`,
+        [tx.order_id]
+      );
       const [itemRows] = await pool.query(
         'SELECT id, name, qty, unit_price, amount FROM order_items WHERE order_id = ? ORDER BY id',
         [tx.order_id]
@@ -166,6 +172,12 @@ router.get('/:id', requireAll, requireBranch, param('id').isInt(), async (req, r
       debtOrderItems.push({
         order_id: tx.order_id,
         order_code: orderRow?.code || String(tx.order_id),
+        order_subtotal: Number(orderRow?.subtotal || 0),
+        order_discount: Number(orderRow?.discount || 0),
+        order_total: Number(orderRow?.total || 0),
+        order_closed_at: orderRow?.closed_at || null,
+        order_branch_id: orderRow?.branch_id ?? null,
+        order_branch_name: orderRow?.branch_name || null,
         transaction_id: tx.id,
         transaction_date: tx.created_at,
         debt_amount: Number(tx.amount),

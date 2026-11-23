@@ -48,6 +48,9 @@ router.post(
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
     try {
       const { username, password, role = 'user', display_name, branch_id, store_id, is_active = true } = req.body;
+      if (req.user.role !== 'admin' && role === 'admin') {
+        return res.status(403).json({ error: 'Only admin can create admin users' });
+      }
       const password_hash = await bcrypt.hash(password, 10);
       const bid = branch_id != null ? Number(branch_id) : null;
       const sid = store_id != null ? Number(store_id) : null;
@@ -91,8 +94,11 @@ router.patch(
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
     try {
       const id = Number(req.params.id);
-      const [existing] = await pool.query('SELECT id FROM users WHERE id = ?', [id]);
+      const [existing] = await pool.query('SELECT id, role FROM users WHERE id = ?', [id]);
       if (!existing[0]) return res.status(404).json({ error: 'User not found' });
+      if (req.user.role !== 'admin' && (existing[0].role === 'admin' || role === 'admin')) {
+        return res.status(403).json({ error: 'Only admin can edit admin users' });
+      }
 
       const updates = [];
       const values = [];
@@ -148,8 +154,11 @@ router.delete('/:id', param('id').isInt(), async (req, res) => {
     if (id === req.user.id) {
       return res.status(400).json({ error: 'ບໍ່ສາມາດລົບບັນຊີຕົວເອງໄດ້' });
     }
-    const [existing] = await pool.query('SELECT id FROM users WHERE id = ?', [id]);
+    const [existing] = await pool.query('SELECT id, role FROM users WHERE id = ?', [id]);
     if (!existing[0]) return res.status(404).json({ error: 'User not found' });
+    if (req.user.role !== 'admin' && existing[0].role === 'admin') {
+      return res.status(403).json({ error: 'Only admin can delete admin users' });
+    }
     await pool.query('DELETE FROM users WHERE id = ?', [id]);
     res.status(204).send();
   } catch (err) {

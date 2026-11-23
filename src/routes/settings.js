@@ -19,16 +19,17 @@ function receiptKey (branchId) {
 }
 
 const DEFAULT_LAYOUT = [
-  { id: 'logo', show: true, align: 'center', order: 0 },
+  { id: 'logo', show: true, align: 'center', order: 0, size: 48 },
   { id: 'headerTitle', show: true, align: 'center', order: 1 },
   { id: 'headerSubtitle', show: true, align: 'center', order: 2 },
   { id: 'receiptCode', show: true, align: 'center', order: 3 },
-  { id: 'dateTime', show: true, align: 'center', order: 4 },
-  { id: 'items', show: true, align: 'left', order: 5 },
-  { id: 'totals', show: true, align: 'left', order: 6 },
-  { id: 'paymentInfo', show: true, align: 'center', order: 7 },
-  { id: 'footerText', show: true, align: 'center', order: 8 },
-  { id: 'qrCode', show: false, align: 'center', order: 9 },
+  { id: 'branchId', show: true, align: 'center', order: 4 },
+  { id: 'dateTime', show: true, align: 'center', order: 5 },
+  { id: 'items', show: true, align: 'left', order: 6 },
+  { id: 'totals', show: true, align: 'left', order: 7 },
+  { id: 'paymentInfo', show: true, align: 'center', order: 8 },
+  { id: 'footerText', show: true, align: 'center', order: 9 },
+  { id: 'qrCode', show: false, align: 'center', order: 10, size: 80 },
 ];
 
 const DEFAULT_RECEIPT = {
@@ -39,7 +40,14 @@ const DEFAULT_RECEIPT = {
   layout: DEFAULT_LAYOUT,
 };
 
-// GET /api/settings/payment — วิธีจ่ายเงิน, แยกตามสาขา
+function defaultPaymentLabel (id) {
+  if (id === 'cash') return 'ເງິນສົດ';
+  if (id === 'transfer') return 'ໂອນ';
+  if (id === 'qr') return 'QR';
+  if (id === 'card') return 'ບັດ';
+  return 'ປະສົມ';
+}
+
 router.get('/payment', requireAll, requireBranch, async (req, res) => {
   try {
     const key = paymentKey(req.branchId);
@@ -51,7 +59,7 @@ router.get('/payment', requireAll, requireBranch, async (req, res) => {
       return res.json({
         methods: PAYMENT_METHOD_IDS.map((id, i) => ({
           id,
-          label: id === 'cash' ? 'ເງິນສົດ' : id === 'transfer' ? 'ໂອນ' : id === 'qr' ? 'QR' : id === 'card' ? 'ບັດ' : 'ປະສົມ',
+          label: defaultPaymentLabel(id),
           enabled: true,
           sort_order: i,
         })),
@@ -65,7 +73,6 @@ router.get('/payment', requireAll, requireBranch, async (req, res) => {
   }
 });
 
-// PATCH /api/settings/payment — แก้ไขตั้งค่าการจ่ายเงิน (แยกตามสาขา)
 router.patch(
   '/payment',
   requireManager,
@@ -101,7 +108,6 @@ router.patch(
   }
 );
 
-// GET /api/settings/receipt — ຕັ້ງຄ່າໃບບິນ, ແຍກຕາມສາຂາ
 router.get('/receipt', requireAll, requireBranch, async (req, res) => {
   try {
     const key = receiptKey(req.branchId);
@@ -119,7 +125,6 @@ router.get('/receipt', requireAll, requireBranch, async (req, res) => {
   }
 });
 
-// PATCH /api/settings/receipt — ແກ້ໄຂຕັ້ງຄ່າໃບບິນ (ແຍກຕາມສາຂາ)
 router.patch(
   '/receipt',
   requireManager,

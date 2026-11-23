@@ -4,6 +4,7 @@ import pool from '../config/db.js';
 import { authMiddleware, requireAll } from '../middleware/auth.js';
 import { branchMiddleware, requireBranch } from '../middleware/branch.js';
 import { syncTableToEsp32 } from '../services/tableSyncEsp32.js';
+import { laoNowSql } from '../utils/time.js';
 
 const router = Router();
 router.use(authMiddleware);
@@ -15,18 +16,19 @@ router.get('/', requireAll, requireBranch, async (req, res) => {
   try {
     const status = req.query.status || 'paid';
     const limit = Math.min(parseInt(req.query.limit, 10) || 100, 500);
-    let sql = `SELECT id, code, status, subtotal, discount, total, opened_at, closed_at, opened_by, shift_id
-       FROM orders`;
+    let sql = `SELECT o.id, o.code, o.status, o.subtotal, o.discount, o.total, o.opened_at, o.closed_at, o.opened_by, o.shift_id, o.branch_id, b.name AS branch_name
+       FROM orders o
+       LEFT JOIN branches b ON b.id = o.branch_id`;
     const params = [];
-    const branchFilter = ' (branch_id = ? OR (branch_id IS NULL AND ? IS NULL))';
+    const branchFilter = ' (o.branch_id = ? OR (o.branch_id IS NULL AND ? IS NULL))';
     if (status && status !== 'all') {
-      sql += ' WHERE status = ? AND' + branchFilter;
+      sql += ' WHERE o.status = ? AND' + branchFilter;
       params.push(status, req.branchId, req.branchId);
     } else {
       sql += ' WHERE' + branchFilter;
       params.push(req.branchId, req.branchId);
     }
-    sql += ' ORDER BY COALESCE(closed_at, opened_at) DESC, id DESC LIMIT ?';
+    sql += ' ORDER BY COALESCE(o.closed_at, o.opened_at) DESC, o.id DESC LIMIT ?';
     params.push(limit);
     const [rows] = await pool.query(sql, params);
     res.json(rows);
@@ -38,7 +40,7 @@ router.get('/', requireAll, requireBranch, async (req, res) => {
 // POST /api/orders/open — ต้องส่ง X-Branch-Id
 router.post('/open', requireAll, requireBranch, async (req, res) => {
   try {
-    const openedAt = new Date();
+    const openedAt = laoNowSql();
     const [currentShift] = await pool.query(
       'SELECT id, branch_id FROM shifts WHERE closed_at IS NULL AND (branch_id = ? OR (branch_id IS NULL AND ? IS NULL)) LIMIT 1',
       [req.branchId, req.branchId]
@@ -53,7 +55,13 @@ router.post('/open', requireAll, requireBranch, async (req, res) => {
     );
     const orderId = r.insertId;
     await pool.query('UPDATE orders SET code = ? WHERE id = ?', ['O' + orderId, orderId]);
-    const [rows] = await pool.query('SELECT * FROM orders WHERE id = ?', [orderId]);
+    const [rows] = await pool.query(
+      `SELECT o.*, b.name AS branch_name
+       FROM orders o
+       LEFT JOIN branches b ON b.id = o.branch_id
+       WHERE o.id = ?`,
+      [orderId]
+    );
     res.status(201).json(rows[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -66,7 +74,10 @@ router.get('/:id', requireAll, requireBranch, param('id').isInt(), async (req, r
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
   try {
     const [orders] = await pool.query(
-      'SELECT * FROM orders WHERE id = ? AND (branch_id = ? OR (branch_id IS NULL AND ? IS NULL))',
+      `SELECT o.*, b.name AS branch_name
+       FROM orders o
+       LEFT JOIN branches b ON b.id = o.branch_id
+       WHERE o.id = ? AND (o.branch_id = ? OR (o.branch_id IS NULL AND ? IS NULL))`,
       [req.params.id, req.branchId, req.branchId]
     );
     const order = orders[0];
@@ -335,8 +346,9 @@ router.post(
         conn.release();
         return res.status(400).json({ error: 'Order is not open' });
       }
-      const discount = Number(req.body.discount) || 0;
-      const orderTotal = Math.max(0, Number(order.subtotal) - discount);
+      const subtotal = Number(order.subtotal) || 0;
+      const discount = Math.min(Math.max(Number(req.body.discount) || 0, 0), subtotal);
+      const orderTotal = Math.max(0, subtotal - discount);
 
       let debtBalance = 0;
       let debtId = null;
@@ -365,7 +377,13 @@ router.post(
       }
 
       const totalRequired = orderTotal + debtBalance;
-      const payments = req.body.payments || [];
+      const payments = (req.body.payments || [])
+        .map(p => ({
+          method: p.method,
+          amount: Number(p.amount) || 0,
+          ref_no: (p.ref_no || '').trim() || null,
+        }))
+        .filter(p => p.amount > 0);
       const payTotal = payments.reduce((s, p) => s + Number(p.amount), 0);
       const isPartialPay = payTotal < totalRequired - 0.01;
 
@@ -390,8 +408,7 @@ router.post(
         });
       }
 
-      const paidAt = new Date();
-      const firstPay = payments[0];
+      const paidAt = laoNowSql();
 
       // คำนวณยอดจ่ายหนี้เก่า vs ยอดจ่ายบิล (ทั้งจ่ายเต็มและจ่ายไม่ครบ)
       // orderPaid = ยอดที่จ่ายเข้าบิล; payTotal = ยอดที่จ่ายรวม; debtPaid = ยอดที่ชำระหนี้เก่า
@@ -451,10 +468,20 @@ router.post(
       }
 
       // บันทึกการจ่ายบิล (ยอดที่จ่ายจริง)
-      await conn.query(
-        'INSERT INTO payments (order_id, method, amount, ref_no, paid_at, paid_by) VALUES (?, ?, ?, ?, ?, ?)',
-        [req.params.id, firstPay?.method || 'cash', orderPaid, firstPay?.ref_no || null, paidAt, req.user.id]
-      );
+      let debtToAllocate = debtPaid;
+      for (const p of payments) {
+        let paymentForOrder = p.amount;
+        if (debtToAllocate > 0) {
+          const usedForDebt = Math.min(debtToAllocate, paymentForOrder);
+          debtToAllocate -= usedForDebt;
+          paymentForOrder -= usedForDebt;
+        }
+        if (paymentForOrder <= 0.01) continue;
+        await conn.query(
+          'INSERT INTO payments (order_id, method, amount, ref_no, paid_at, paid_by) VALUES (?, ?, ?, ?, ?, ?)',
+          [req.params.id, p.method, paymentForOrder, p.ref_no, paidAt, req.user.id]
+        );
+      }
 
       await conn.query(
         'UPDATE orders SET status = ?, discount = ?, total = ?, closed_by = ?, closed_at = ? WHERE id = ?',
@@ -479,7 +506,13 @@ router.post(
           if (tRows[0]) syncTableToEsp32({ ...tRows[0], status: 'available' }, branchId);
         }).catch(() => {});
       }
-      const [rows] = await pool.query('SELECT * FROM orders WHERE id = ?', [req.params.id]);
+      const [rows] = await pool.query(
+        `SELECT o.*, b.name AS branch_name
+         FROM orders o
+         LEFT JOIN branches b ON b.id = o.branch_id
+         WHERE o.id = ?`,
+        [req.params.id]
+      );
       const [payRows] = await pool.query('SELECT * FROM payments WHERE order_id = ?', [req.params.id]);
       res.json({ order: rows[0], payments: payRows });
     } catch (err) {

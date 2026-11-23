@@ -41,8 +41,17 @@ router.post(
       const name = req.body.name.trim();
       const qr_image_url = req.body.qr_image_url.trim();
       const account_no = req.body.account_no?.trim() || null;
-      const sort_order = Number(req.body.sort_order) || 0;
       const branchId = req.branchId;
+      let sort_order = req.body.sort_order;
+      if (sort_order === undefined) {
+        const [sortRows] = await pool.query(
+          'SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_sort_order FROM payment_banks WHERE branch_id = ? OR (branch_id IS NULL AND ? IS NULL)',
+          [branchId, branchId]
+        );
+        sort_order = sortRows[0]?.next_sort_order ?? 0;
+      } else {
+        sort_order = Number(sort_order) || 0;
+      }
       const [r] = await pool.query(
         'INSERT INTO payment_banks (name, qr_image_url, account_no, sort_order, branch_id) VALUES (?, ?, ?, ?, ?)',
         [name, qr_image_url, account_no, sort_order, branchId]

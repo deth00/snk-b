@@ -3,6 +3,7 @@ import { body, param, validationResult } from 'express-validator';
 import pool from '../config/db.js';
 import { authMiddleware, requireAll } from '../middleware/auth.js';
 import { branchMiddleware, requireBranch } from '../middleware/branch.js';
+import { laoNowSql } from '../utils/time.js';
 
 const router = Router();
 router.use(authMiddleware);
@@ -41,7 +42,7 @@ router.post(
       if (current.length > 0) {
         return res.status(400).json({ error: 'สาขานี้มีกะเปิดอยู่แล้ว' });
       }
-      const openedAt = new Date();
+      const openedAt = laoNowSql();
       const cashOpen = req.body.cash_open != null ? Number(req.body.cash_open) : null;
       await pool.query(
         'INSERT INTO shifts (opened_by, opened_at, cash_open, branch_id) VALUES (?, ?, ?, ?)',
@@ -56,7 +57,7 @@ router.post(
 );
 
 // GET /api/shifts/current
-router.get('/current', requireAll, requireBranch, async (req, res) => {
+router.get('/current', requireBranch, async (req, res) => {
   try {
     const [rows] = await pool.query(
       `SELECT s.*, u.username AS opened_by_username
@@ -104,7 +105,27 @@ router.post(
         conn.release();
         return res.status(403).json({ error: 'กะนี้ไม่ใช่ของสาขานี้' });
       }
-      const closedAt = new Date();
+      const shiftBranchId = shift.branch_id != null ? Number(shift.branch_id) : null;
+      const [busyTables] = await conn.query(
+        `SELECT id, code, name, status, active_session_id
+         FROM \`tables\`
+         WHERE (branch_id = ? OR (branch_id IS NULL AND ? IS NULL))
+           AND (status <> 'available' OR active_session_id IS NOT NULL)
+         ORDER BY code
+         LIMIT 50`,
+        [shiftBranchId, shiftBranchId]
+      );
+      if (busyTables.length > 0) {
+        await conn.rollback();
+        const tableNames = busyTables.map((table) => table.name || table.code).join(', ');
+        return res.status(400).json({
+          error: `ປິດກະບໍ່ໄດ້ ຕ້ອງໃຫ້ໂຕະວ່າງທັງໝົດກ່ອນ: ${tableNames}`,
+          code: 'TABLES_NOT_AVAILABLE',
+          tables: busyTables,
+        });
+      }
+
+      const closedAt = laoNowSql();
       const cashClose = req.body.cash_close != null ? Number(req.body.cash_close) : null;
       const note = req.body.note || null;
 
